@@ -36,6 +36,7 @@ class rates(object):
         self.hlc=(high+low+close)/3.0
         self.cStd=0.0
         self.dcStd=0.0
+        self.KalmanNextPredict=0.0
 
 
 class shared_data(object):
@@ -177,6 +178,31 @@ def generate_vector(data, step, var):
        
     return v
 
+def generate_vector_O(data, step):
+    v=np.array([])
+    v1=max(0,step-1)
+    v2=max(0,step-2)
+    v3=max(0,step-3)
+    v4=max(0,step-4)
+
+    if (step==0):
+        v=[data[step].o, 0.0, 0.0, 0.0, 0.0]   
+    if (step>0):
+        v=[data[step].o, data[step].o-data[v2].c, data[step].o-data[v1].h, data[step].o-data[v1].l, data[step].o-data[v2].l]
+                               
+    return v
+
+def generate_vector_C(data, step):
+    v=np.array([])
+    v1=max(0,step-1)
+    v2=max(0,step-2)
+    v3=max(0,step-3)
+    v4=max(0,step-4)
+
+    v=[data[step].c, data[step].c-data[v2].c, data[step].h-data[step].c, data[step].c-data[step].l, data[step].c-data[v2].l]
+                               
+    return v
+
 def check_kalman(individual_):
     assert GAParams==len(individual_)  
 
@@ -185,8 +211,9 @@ def check_kalman(individual_):
     x3=resize(individual_[2], 0, GAMax, -0.15, 0.15)
     x4=resize(individual_[3], 0, GAMax, -0.15, 0.15)
 
-    x5=resize(individual_[4], 0, GAMax, 0.15, 0.25)
-    x6=int(resize(individual_[5], 0, GAMax, 0., 10.4))
+    x5=resize(individual_[4], 0, GAMax, 0.15, 0.35)
+    x6=resize(individual_[5], 0, GAMax, 0.15, 0.35)
+    #x6=int(resize(individual_[5], 0, GAMax, 0., 10.4))
 
     feature_vector=list()
     feature_vector.append(x1) 
@@ -233,43 +260,41 @@ def check_kalman(individual_):
     previous_close=0.0    
     true_predictions=0
     false_predictions=0
-    step=0
     
-    # Kalman Initialization
-    z=generate_vector(v_rates, step, x6)     
+    z=generate_vector_O(v_rates, 0)
     kf.x=z
+    kf.predict() 
+    z=generate_vector_C(v_rates, 0)
+    kf.update(z)
     kf.predict()
-    step=step+1
-    #End - Kalman Initialization
-   
-    while step<len(v_rates):
-        z=generate_vector(v_rates, step, x6)
-        kf.Q[0,0]=v_rates[step].cStd*x5
-        kf.Q[1,1]=v_rates[step].dcStd*0.26
-        kf.update(z)
-        #print("Current vector: ",z)
-        #print("Previous close: ", v_rates[step-1][2])
-        #print("Predicted current close @ previous step: ", predicted_next_close)
-        if(np.sign((z[0]-v_rates[step-1].c)*(predicted_next_close-v_rates[step-1].c))>0):
+    v_rates[0].KalmanNextPredict=kf.x[0]
+    
+    for i in range(1,len(v_rates)-1):
+        kf.Q[0,0]=v_rates[i].cStd*x5
+        kf.Q[1,1]=v_rates[i].dcStd*x6        
+        if (v_rates[i].date!=v_rates[i-1].date):
+            z=generate_vector_O(v_rates, i)
+            kf.update(z)            
+            kf.predict()
+        z=generate_vector_C(v_rates, i)        
+        kf.update(z)        
+        kf.predict()
+        v_rates[i].KalmanNextPredict=kf.x[0]
+        if(np.sign((v_rates[i+1].c-v_rates[i].c)*(v_rates[i].KalmanNextPredict-v_rates[i].c))>0):
             true_predictions=1+true_predictions
             #print("+1 Tp")
         else:
             false_predictions=1+false_predictions           
             #print("+1 Fp")
-        kf.predict()
-        predicted_next_close=kf.x[0]
-        #print("Predicted next close: ", predicted_next_close)
-                             
-        step=step+1
     
     #print("F: ", kf.F)
     #print("R: ", f2.R)
     #print("Q: ", f2.Q)
-    mutex.acquire()
-    print("TP: ",true_predictions)
-    print("FP: ",false_predictions)
-    fitness=1.0*true_predictions/step
-    print("DS current: %2.6f" % fitness)
+    fitness=1.0*true_predictions/(true_predictions+false_predictions)
+    
+    mutex.acquire()    
+    print("TP: %s, FP: %s, Fitness = %2.6f" %(true_predictions, false_predictions, fitness))
+
     global best_correctness
     if (fitness>best_correctness):
         best_correctness=fitness
@@ -317,10 +342,11 @@ if __name__ == "__main__":
     
     random.seed(7) 
     check_version()   
-    v_rates=list()
+    shutil.copyfile('ukf2.py', '.\\arch\\ukf2_'+str(version)+'_'+Gtimestr+'.py')      
+    v_rates=list()    
     v_rates=read_rates()
 
-    shutil.copyfile('ukf2.py', '.\\arch\\ukf2_'+str(version)+'_'+Gtimestr+'.py')  
+
     
     #v_rates=read_rates()
     pool = multiprocessing.Pool(processes=7, initializer=init_pool, initargs=(version, v_rates, Gtimestr,))  
