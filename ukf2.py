@@ -21,7 +21,7 @@ best_params_=0
 version=0
 Gtimestr = datetime.datetime.now().strftime("%Y%m%d-%H%M%S") 
 GAMax=80
-GAParams=6
+GAParams=7
 mutex = Lock()
 
 class rates(object):
@@ -36,6 +36,9 @@ class rates(object):
         self.hlc=(high+low+close)/3.0
         self.cStd=0.0
         self.dcStd=0.0
+        self.dhcStd=0.0
+        self.dclStd=0.0
+        self.t1Std=0.0
         self.KalmanNextPredict=0.0
 
 
@@ -95,6 +98,45 @@ def GetDayBeginIndex(data, i):
     
     return (idx+1)
 
+def calc_std4Kalman(data, std_length):
+    idx=len(data)-1
+    d=max(len(data)-std_length,0)
+    dm=len(data)
+    s=np.array([])
+    for i1 in range(d,dm):
+        s=np.append(s,[data[i1].c])
+    data[idx].cStd=s.std()  
+    
+    d1=max(len(data)-std_length,1)
+    dm1=len(data)
+    s1=np.array([])
+    for i1 in range(d1,dm1):
+        cc=abs(data[i1].c-data[i1-1].c)
+        co=abs(data[i1].o-data[i1-1].c)
+        if (data[i1].c>data[i1-1].c and data[i1].o>data[i1-1].c and data[i1].c>data[i1].o):
+            cc=cc-co
+        if (data[i1].c<data[i1-1].c and data[i1].o<data[i1-1].c and data[i1].c<data[i1].o):
+            cc=cc-co                    
+        s1=np.append(s1,[cc-co])
+    if (dm1>d1):
+        data[idx].dcStd=s1.std() 
+
+    s2=np.array([])
+    s3=np.array([])
+    s4=np.array([])    
+    for i1 in range(d1,dm1):
+        hc=abs(data[i1].h-data[i1].c)
+        cl=abs(data[i1].c-data[i1].l)
+        s2=np.append(s2,[hc])
+        s3=np.append(s3,[cl])
+        v4=max(0,i1-4)
+        dc2=abs(data[i1].c-data[v4].ohlc)
+        s4=np.append(s4,[dc2])
+    if (dm1>d1):
+        data[idx].dhcStd=s2.std()
+        data[idx].dclStd=s3.std() 
+        data[idx].t1Std=s4.std()
+
 def read_rates():
     #read_rates=open('SBER_170316_180828-5m.txt', 'r')  
     read_rates=open('SBER_150302_200425-5m.txt', 'r') 
@@ -107,20 +149,7 @@ def read_rates():
             #rts=np.array([float(l1[5]), float(l1[6]), float(l1[7]), 0.0, (float(l1[5])+float(l1[6])+float(l1[7]))/3.0])
             rts=rates(int(l1[2]),int(l1[3]), float(l1[4]), float(l1[5]), float(l1[6]), float(l1[7]))
             v_rates.append(rts)
-            d=max(len(v_rates)-CloseStdLen,0)
-            dm=len(v_rates)
-            s=np.array([])
-            for i1 in range(d,dm):
-                s=np.append(s,[v_rates[i1].c])
-            v_rates[dm-1].cStd=s.std()
-            
-            d1=max(len(v_rates)-CloseStdLen,1)
-            dm1=len(v_rates)
-            s1=np.array([])
-            for i1 in range(d1,dm1):
-                s1=np.append(s1,[v_rates[i1].c-v_rates[i1-1].c])
-            if (dm1>d1):
-                v_rates[dm-1].dcStd=s1.std()            
+            calc_std4Kalman(v_rates, CloseStdLen)          
                     
     read_rates.close()  
     print("Reading rates from file is completed!")
@@ -188,44 +217,50 @@ def generate_vector_O(data, step):
     if (step==0):
         v=[data[step].o, 0.0, 0.0, 0.0, 0.0]   
     if (step>0):
-        v=[data[step].o, data[step].o-data[v2].c, data[step].o-data[v1].h, data[step].o-data[v1].l, data[step].o-data[v2].l]
+        v=[data[step].o, data[step].o-data[v1].c, data[step].o-data[v1].h, data[step].o-data[v1].l, data[step].o-data[v2].c]
                                
     return v
 
-def generate_vector_C(data, step):
+def generate_vector_C(data, step, var):
     v=np.array([])
     v1=max(0,step-1)
     v2=max(0,step-2)
     v3=max(0,step-3)
     v4=max(0,step-4)
 
-    v=[data[step].c, data[step].c-data[v2].c, data[step].h-data[step].c, data[step].c-data[step].l, data[step].c-data[v2].l]
+    v=[]
+    if (var==0):
+        v=[data[step].c, data[step].c-data[v1].c, data[step].h-data[step].c, data[step].c-data[step].l, data[step].c-data[v2].l]
+    if (var==1):
+        v=[data[step].c, data[step].c-data[v1].c, data[step].h-data[step].c, data[step].c-data[step].l, data[step].c-data[v2].l]        
+    if (var==2):
+        v=[data[step].c, data[step].c-data[v1].c, data[step].h-data[step].c, data[step].c-data[step].l, data[step].c-data[v2].hlc]        
+    if (var==3):
+        v=[data[step].c, data[step].c-data[v1].c, data[step].h-data[step].c, data[step].c-data[step].l, data[step].c-data[v3].hlc]                
+    if (var==4):
+        v=[data[step].c, data[step].c-data[v1].c, data[step].h-data[step].c, data[step].c-data[step].l, data[step].c-data[v4].hlc]
+    if (var==5):
+        v=[data[step].c, data[step].c-data[v1].c, data[step].h-data[step].c, data[step].c-data[step].l, data[step].c-data[v3].ohlc] 
+    if (var==6):
+        v=[data[step].c, data[step].c-data[v1].c, data[step].h-data[step].c, data[step].c-data[step].l, data[step].c-data[v4].ohlc]               
                                
     return v
 
-def check_kalman(individual_):
-    assert GAParams==len(individual_)  
+def generate_vector2_C(data, step):
+    v=np.array([])
+    v1=max(0,step-1)
+    v2=max(0,step-2)
+    v3=max(0,step-3)
+    v4=max(0,step-4)
 
-    x1=resize(individual_[0], 0, GAMax, -0.15, 0.15)
-    x2=resize(individual_[1], 0, GAMax, -0.15, 0.15)
-    x3=resize(individual_[2], 0, GAMax, -0.15, 0.15)
-    x4=resize(individual_[3], 0, GAMax, -0.15, 0.15)
-
-    x5=resize(individual_[4], 0, GAMax, 0.15, 0.35)
-    x6=resize(individual_[5], 0, GAMax, 0.15, 0.35)
-    #x6=int(resize(individual_[5], 0, GAMax, 0., 10.4))
-
-    feature_vector=list()
-    feature_vector.append(x1) 
-    feature_vector.append(x2) 
-    feature_vector.append(x3) 
-    feature_vector.append(x4) 
-    feature_vector.append(x5) 
-    feature_vector.append(x6)
+    v=[data[step].c, data[step].c-data[v1].c, data[step].h-data[step].c, data[step].c-data[step].l, data[step].c-data[v4].ohlc]               
+    v2=[data[step].cStd, data[step].dcStd, data[step].dhcStd, data[step].dclStd, data[step].t1Std] 
+                               
+    return v,v2
 
 
 
-# NEW UKF
+def ukf_init(x1, x2, x3, x4):
     def fx(x, dt):
          # state transition function - predict next state based
          # on constant velocity model x = vt + x_0
@@ -240,10 +275,8 @@ def check_kalman(individual_):
     def hx(x):
     # measurement function - convert state into a measurement
     # where measurements are [x_pos, y_pos]
-        return np.array([x[0], x[1], x[2], x[3], x[4]])
-
-    dt = 30.09
-
+        return np.array([x[0], x[1], x[2], x[3], x[4]])    
+    dt = 30
     # create sigma points to use in the filter. This is standard for Gaussian processes
     points = MerweScaledSigmaPoints(5, alpha=0.10550, beta=1.6, kappa=0.)
 
@@ -251,10 +284,32 @@ def check_kalman(individual_):
     kf.P *= 100. # initial uncertainty
     z_std = 0.25
     kf.R = np.diag([z_std**1, z_std**1, z_std**1, z_std**1, z_std**1]) # 1 standard
-    kf.Q =np.eye(5)*.001
-  
-# END UKF   
+    kf.Q =np.eye(5)*.001   
+    return kf
     
+
+def check_kalman(individual_):
+    assert GAParams==len(individual_)  
+
+    x1=resize(individual_[0], 0, GAMax, -0.15, 0.15)
+    x2=resize(individual_[1], 0, GAMax, -0.15, 0.15)
+    x3=resize(individual_[2], 0, GAMax, -0.15, 0.15)
+    x4=resize(individual_[3], 0, GAMax, -0.15, 0.15)
+
+    x5=resize(individual_[4], 0, GAMax, 0.15, 0.35)
+    x6=resize(individual_[5], 0, GAMax, 0.15, 0.35)
+    feature_type=int(resize(individual_[6], 0, GAMax, 0., 6.4))
+
+    feature_vector=list()
+    feature_vector.append(x1) 
+    feature_vector.append(x2) 
+    feature_vector.append(x3) 
+    feature_vector.append(x4) 
+    feature_vector.append(x5) 
+    feature_vector.append(x6)
+    feature_vector.append(feature_type)
+    
+    kf=ukf_init(x1,x2,x3,x4)
     predicted_next_close=0.0
     true_close=0.0
     previous_close=0.0    
@@ -264,19 +319,22 @@ def check_kalman(individual_):
     z=generate_vector_O(v_rates, 0)
     kf.x=z
     kf.predict() 
-    z=generate_vector_C(v_rates, 0)
+    z,z2=generate_vector2_C(v_rates, 0)
     kf.update(z)
     kf.predict()
     v_rates[0].KalmanNextPredict=kf.x[0]
     
-    for i in range(1,len(v_rates)-1):
-        kf.Q[0,0]=v_rates[i].cStd*x5
-        kf.Q[1,1]=v_rates[i].dcStd*x6        
+    for i in range(1,len(v_rates)-1):       
         if (v_rates[i].date!=v_rates[i-1].date):
             z=generate_vector_O(v_rates, i)
-            kf.update(z)            
+            kf.update(z)
             kf.predict()
-        z=generate_vector_C(v_rates, i)        
+        z,z2=generate_vector2_C(v_rates, i)  
+        kf.Q[0,0]=z2[0]*x5
+        kf.Q[1,1]=z2[1]*x6           
+        kf.Q[2,2]=z2[2]*x6
+        kf.Q[3,3]=z2[3]*x6
+        kf.Q[4,4]=z2[4]*x6
         kf.update(z)        
         kf.predict()
         v_rates[i].KalmanNextPredict=kf.x[0]
@@ -346,9 +404,6 @@ if __name__ == "__main__":
     v_rates=list()    
     v_rates=read_rates()
 
-
-    
-    #v_rates=read_rates()
     pool = multiprocessing.Pool(processes=7, initializer=init_pool, initargs=(version, v_rates, Gtimestr,))  
     toolbox.register("map", pool.map) 
     
@@ -359,8 +414,7 @@ if __name__ == "__main__":
     stats.register("std", np.std)
     stats.register("min", np.min)
     stats.register("max", np.max)
-    
-       
+           
     pop, log = algorithms.eaSimple(pop, toolbox, cxpb=0.8, mutpb=0.15, ngen=20, stats=stats, halloffame=hof, verbose=True)
     print(hof)            
     print("Best_correctness: %f" % best_correctness)          
